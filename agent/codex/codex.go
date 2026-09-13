@@ -616,6 +616,7 @@ func codexSkillDirs(workDir, explicitCodexHome string) []string {
 	if codexHome != "" {
 		userDirs = append(userDirs,
 			filepath.Join(codexHome, "skills"),
+			filepath.Join(codexHome, "skills", ".system"),
 			// Superpowers installs Codex-compatible skills under this layout.
 			filepath.Join(codexHome, "superpowers", "skills"),
 		)

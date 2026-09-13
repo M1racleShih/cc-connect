@@ -1562,15 +1562,6 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	}
 
 	content := job.Prompt
-	if strings.HasPrefix(content, "/") {
-		parts := strings.Fields(content)
-		if len(parts) > 0 {
-			cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-			if skill := e.skills.Resolve(cmd); skill != nil {
-				content = BuildSkillInvocationPrompt(skill, parts[1:])
-			}
-		}
-	}
 
 	msg := &Message{
 		SessionKey:   sessionKey,
@@ -1614,6 +1605,17 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 				"work_dir", job.WorkDir, "session_key", sessionKey, "error", err)
 		}
 	}
+
+	if strings.HasPrefix(content, "/") {
+		parts := strings.Fields(content)
+		if len(parts) > 0 {
+			cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+			if skill := e.skillsForAgent(agent).Resolve(cmd); skill != nil {
+				content = BuildSkillInvocationPrompt(skill, parts[1:])
+			}
+		}
+	}
+	msg.Content = content
 
 	useNewSession := false
 	if e.cronScheduler != nil {
@@ -1765,15 +1767,6 @@ func (e *Engine) ExecuteTimerJob(job *TimerJob) error {
 	}
 
 	content := job.Prompt
-	if strings.HasPrefix(content, "/") {
-		parts := strings.Fields(content)
-		if len(parts) > 0 {
-			cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
-			if skill := e.skills.Resolve(cmd); skill != nil {
-				content = BuildSkillInvocationPrompt(skill, parts[1:])
-			}
-		}
-	}
 
 	msg := &Message{
 		SessionKey:   sessionKey,
@@ -1815,6 +1808,17 @@ func (e *Engine) ExecuteTimerJob(job *TimerJob) error {
 				"work_dir", job.WorkDir, "session_key", sessionKey, "error", err)
 		}
 	}
+
+	if strings.HasPrefix(content, "/") {
+		parts := strings.Fields(content)
+		if len(parts) > 0 {
+			cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+			if skill := e.skillsForAgent(agent).Resolve(cmd); skill != nil {
+				content = BuildSkillInvocationPrompt(skill, parts[1:])
+			}
+		}
+	}
+	msg.Content = content
 
 	useNewSession := false
 	if e.timerScheduler != nil {
@@ -6811,7 +6815,12 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 			e.executeCustomCommand(p, msg, custom, args)
 			return true
 		}
-		if skill := e.skills.Resolve(cmd); skill != nil {
+		registry, err := e.skillsForMessage(p, msg)
+		if err != nil {
+			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
+			return true
+		}
+		if skill := registry.Resolve(cmd); skill != nil {
 			if disabledCmds[strings.ToLower(skill.Name)] {
 				slog.Info("audit: command_blocked",
 					"user_id", msg.UserID, "platform", msg.Platform,
@@ -9686,8 +9695,13 @@ func (e *Engine) GetAllCommands() []BotCommandInfo {
 		})
 	}
 
-	// Collect skills
-	for _, s := range e.skills.ListAll() {
+	// Platform-wide menus have no workspace context. In multi-workspace
+	// mode users discover skills through /skills in their bound channel.
+	var menuSkills []*Skill
+	if !e.multiWorkspace {
+		menuSkills = e.skillsForAgent(e.agent).ListAll()
+	}
+	for _, s := range menuSkills {
 		lowerName := strings.ToLower(s.Name)
 		if seenCmds[lowerName] {
 			continue
@@ -12205,7 +12219,7 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 	case "/config":
 		return e.renderConfigCard()
 	case "/skills":
-		return e.renderSkillsCard()
+		return e.skillsCardForSession(sessionKey)
 	case "/doctor":
 		return e.renderDoctorCard()
 	case "/whoami":
@@ -13892,8 +13906,8 @@ func (e *Engine) renderConfigCard() *Card {
 		Build()
 }
 
-func (e *Engine) renderSkillsCard() *Card {
-	skills := e.skills.ListAll()
+func (e *Engine) renderSkillsCard(registry *SkillRegistry) *Card {
+	skills := registry.ListAll()
 	if len(skills) == 0 {
 		return e.simpleCard(e.i18n.T(MsgCardTitleSkills), "purple", e.i18n.T(MsgSkillsEmpty))
 	}
@@ -15009,8 +15023,13 @@ func (e *Engine) executeSkill(p Platform, msg *Message, skill *Skill, args []str
 }
 
 func (e *Engine) cmdSkills(p Platform, msg *Message) {
+	registry, err := e.skillsForMessage(p, msg)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
+		return
+	}
 	if !supportsCards(p) {
-		skills := e.skills.ListAll()
+		skills := registry.ListAll()
 		if len(skills) == 0 {
 			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSkillsEmpty))
 			return
@@ -15031,7 +15050,7 @@ func (e *Engine) cmdSkills(p Platform, msg *Message) {
 		return
 	}
 
-	e.replyWithCard(p, msg.ReplyCtx, e.renderSkillsCard())
+	e.replyWithCard(p, msg.ReplyCtx, e.renderSkillsCard(registry))
 }
 
 func displayCommandForPlatform(platformName, command string) string {

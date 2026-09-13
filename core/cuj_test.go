@@ -2443,3 +2443,35 @@ func TestCUJ_H4_FeishuTopicsKeepWorkspaceBindingsIsolated(t *testing.T) {
 		t.Fatalf("topic B changed after topic A unbind: %q", got)
 	}
 }
+
+// Lists and invocation must agree across groups, including after rebinding.
+func TestCUJ_H5_WorkspaceSkillDiscoveryAndInvocation(t *testing.T) {
+	p := &stubPlatformEngine{n: "feishu"}
+	e, a, b := newWorkspaceSkillsEngine(t, p)
+	for _, channel := range []string{"a", "b"} {
+		e.ReceiveMessage(p, skillMessage(p.Name(), channel, "/skills"))
+		sent := p.getSent()
+		other := "a"
+		if channel == "a" {
+			other = "b"
+		}
+		assertWorkspaceSkills(t, sent[len(sent)-1], channel, other)
+	}
+	for channel, ws := range map[string]string{"a": a, "b": b} {
+		before := len(p.getSent())
+		e.ReceiveMessage(p, skillMessage(p.Name(), channel, "/SHARED_SKILL"))
+		env := &cujEnv{t: t, engine: e, plat: p}
+		env.waitFor("workspace skill response", 3*time.Second, func() bool {
+			for _, text := range p.getSent()[before:] {
+				if strings.Contains(text, "Executed in "+ws) && strings.Contains(text, "Instructions "+channel) {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	e.ReceiveMessage(p, skillMessage(p.Name(), "a", "/workspace bind b"))
+	e.ReceiveMessage(p, skillMessage(p.Name(), "a", "/skills"))
+	sent := p.getSent()
+	assertWorkspaceSkills(t, sent[len(sent)-1], "b", "a")
+}

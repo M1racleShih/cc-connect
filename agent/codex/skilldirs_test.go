@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/chenhg5/cc-connect/core"
 )
 
 func TestSkillDirs_UsesProjectAgentAndCodexHomes(t *testing.T) {
@@ -45,6 +47,7 @@ func TestSkillDirs_UsesProjectAgentAndCodexHomes(t *testing.T) {
 		filepath.Join(repo, ".codex", "skills"),
 		filepath.Join(repo, ".claude", "skills"),
 		filepath.Join(codexHome, "skills"),
+		filepath.Join(codexHome, "skills", ".system"),
 		filepath.Join(codexHome, "superpowers", "skills"),
 		filepath.Join(home, ".agents", "skills"),
 		filepath.Join(home, ".claude", "skills"),
@@ -114,6 +117,7 @@ func TestSkillDirs_IncludesCodexPluginSkillRoots(t *testing.T) {
 		filepath.Join(workDir, ".codex", "skills"),
 		filepath.Join(workDir, ".claude", "skills"),
 		filepath.Join(codexHome, "skills"),
+		filepath.Join(codexHome, "skills", ".system"),
 		filepath.Join(codexHome, "superpowers", "skills"),
 		pluginSkillsDir,
 		filepath.Join(home, ".claude", "skills"),
@@ -198,4 +202,37 @@ func TestSkillDirs_RaceFreeAgainstSetWorkDir(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestSkillDirs_DiscoversSystemSkills(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	for _, source := range []string{"default", "env", "explicit"} {
+		t.Run(source, func(t *testing.T) {
+			codexHome := filepath.Join(home, ".codex")
+			explicit := ""
+			t.Setenv("CODEX_HOME", "")
+			if source == "env" {
+				codexHome = filepath.Join(home, "env")
+				t.Setenv("CODEX_HOME", codexHome)
+			}
+			if source == "explicit" {
+				codexHome = filepath.Join(home, "explicit")
+				explicit = codexHome
+				t.Setenv("CODEX_HOME", filepath.Join(home, "ignored"))
+			}
+			dir := filepath.Join(codexHome, "skills", ".system", "system-demo")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("System instructions"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			r := core.NewSkillRegistry()
+			r.SetDirs(codexSkillDirs(home, explicit))
+			if r.Resolve("system-demo") == nil {
+				t.Fatal("system skill not discovered")
+			}
+		})
+	}
 }
