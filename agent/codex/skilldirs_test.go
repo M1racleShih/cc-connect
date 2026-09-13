@@ -39,18 +39,13 @@ func TestSkillDirs_UsesProjectAgentAndCodexHomes(t *testing.T) {
 	want := []string{
 		filepath.Join(workDir, ".agents", "skills"),
 		filepath.Join(workDir, ".codex", "skills"),
-		filepath.Join(workDir, ".claude", "skills"),
 		filepath.Join(repo, "nested", ".agents", "skills"),
 		filepath.Join(repo, "nested", ".codex", "skills"),
-		filepath.Join(repo, "nested", ".claude", "skills"),
 		filepath.Join(repo, ".agents", "skills"),
 		filepath.Join(repo, ".codex", "skills"),
-		filepath.Join(repo, ".claude", "skills"),
 		filepath.Join(codexHome, "skills"),
 		filepath.Join(codexHome, "skills", ".system"),
-		filepath.Join(codexHome, "superpowers", "skills"),
 		filepath.Join(home, ".agents", "skills"),
-		filepath.Join(home, ".claude", "skills"),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("len(SkillDirs()) = %d, want %d\n got=%v", len(got), len(want), got)
@@ -115,12 +110,9 @@ func TestSkillDirs_IncludesCodexPluginSkillRoots(t *testing.T) {
 
 	want := []string{
 		filepath.Join(workDir, ".codex", "skills"),
-		filepath.Join(workDir, ".claude", "skills"),
 		filepath.Join(codexHome, "skills"),
 		filepath.Join(codexHome, "skills", ".system"),
-		filepath.Join(codexHome, "superpowers", "skills"),
 		pluginSkillsDir,
-		filepath.Join(home, ".claude", "skills"),
 	}
 	for _, dir := range want {
 		if !got[dir] {

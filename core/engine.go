@@ -1427,7 +1427,7 @@ func (e *Engine) ProjectName() string {
 
 // ListSkills returns all discovered skills for this engine's project.
 func (e *Engine) ListSkills() []*Skill {
-	return e.skills.ListAll()
+	return e.skillsForAgent(e.agent).ListAll()
 }
 
 // SkillDirs returns the configured skill directories for this engine.

@@ -28,6 +28,68 @@ type workspaceSkillSession struct {
 	workDir string
 }
 
+type catalogSkillAgent struct {
+	workspaceSkillAgent
+	catalog []*Skill
+	err     error
+}
+
+func (a *catalogSkillAgent) ListSkills(context.Context) ([]*Skill, error) {
+	return a.catalog, a.err
+}
+
+func newCatalogSkillsEngine(t *testing.T, p Platform) (*Engine, *catalogSkillAgent) {
+	t.Helper()
+	base := t.TempDir()
+	root := filepath.Join(base, ".agents", "skills")
+	// The directory provider deliberately exposes files outside the native
+	// allowlist, including a disabled sibling in the same skill root.
+	for _, name := range []string{"enabled", "disabled-sibling", "claude-only", "cached-only"} {
+		writeWorkspaceSkill(t, root, name, "Unfiltered "+name)
+	}
+	a := &catalogSkillAgent{
+		workspaceSkillAgent: workspaceSkillAgent{name: "catalog-agent", workDir: base},
+		catalog:             []*Skill{{Name: "plugin:enabled", Description: "Enabled native skill", Prompt: "Native selected instructions", Source: filepath.Join(root, "enabled")}},
+	}
+	e := NewEngine("test", a, []Platform{p}, filepath.Join(base, "sessions.json"), LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
+	return e, a
+}
+
+func TestSkills_CatalogExcludesDisabledSiblingsAndOtherAgents(t *testing.T) {
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	e, a := newCatalogSkillsEngine(t, p)
+	msg := skillMessage(p.Name(), "a", "/skills")
+	e.ReceiveMessage(p, msg)
+	p.mu.Lock()
+	cards := append([]*Card(nil), p.repliedCards...)
+	p.mu.Unlock()
+	if len(cards) == 0 {
+		t.Fatal("missing skills card")
+	}
+	cards = append(cards, e.handleCardNav("nav:/skills", msg.SessionKey))
+	for _, card := range cards {
+		text := card.RenderText()
+		if !strings.Contains(text, "/plugin:enabled") {
+			t.Fatalf("native skill missing: %s", text)
+		}
+		for _, forbidden := range []string{"disabled-sibling", "claude-only", "cached-only"} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("unselected skill %s leaked: %s", forbidden, text)
+			}
+		}
+	}
+	a.catalog = nil
+	if got := e.ListSkills(); len(got) != 0 {
+		t.Fatalf("empty native catalog fell back to directories: %v", got)
+	}
+	a.err = fmt.Errorf("catalog unavailable")
+	registry, err := e.skillsForMessage(p, msg)
+	if err == nil || registry != nil {
+		t.Fatal("catalog failure must propagate without a directory fallback")
+	}
+}
+
 func (s *workspaceSkillSession) Send(prompt, sessionID string, images []ImageAttachment, files []FileAttachment) error {
 	s.mu.Lock()
 	s.reply = "Executed in " + s.workDir + "\n" + prompt
@@ -63,7 +125,7 @@ func newWorkspaceSkillsEngine(t *testing.T, p Platform) (*Engine, string, string
 	for channel, ws := range map[string]string{"a": a, "b": b} {
 		e.workspaceBindings.Bind("project:test", workspaceChannelKey(p.Name(), "oc_"+channel), channel, ws)
 	}
-	t.Cleanup(func() { e.Stop() })
+	t.Cleanup(func() { _ = e.Stop() })
 	return e, a, b
 }
 func skillMessage(platform, channel, content string) *Message {
