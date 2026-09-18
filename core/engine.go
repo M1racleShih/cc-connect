@@ -10303,6 +10303,13 @@ func (e *Engine) switchModelOnAgent(agent Agent, target string, persistConfig bo
 	return target, nil
 }
 
+// reasoningUsageText renders the /reasoning usage line with the effort levels
+// actually supported by the active agent, so no agent's level set (nor name)
+// is hardcoded in core.
+func reasoningUsageText(i *I18n, efforts []string) string {
+	return i.Tf(MsgReasoningUsage, strings.Join(efforts, "|"))
+}
+
 func (e *Engine) cmdReasoning(p Platform, msg *Message, args []string) {
 	agent, sessions, _, err := e.commandContext(p, msg)
 	if err != nil {
