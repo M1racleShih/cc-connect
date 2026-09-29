@@ -5499,7 +5499,7 @@ func TestCmdReasoning_UsageListsAgentEfforts(t *testing.T) {
 	t.Run("card note", func(t *testing.T) {
 		agent := &stubModelModeAgent{reasoningEfforts: efforts}
 		e := NewEngine("test", agent, nil, "", LangEnglish)
-		card := e.renderReasoningCard()
+		card := e.renderReasoningCard(e.agent)
 
 		for _, element := range card.Elements {
 			if note, ok := element.(CardNote); ok && note.Text == wantUsage {
@@ -5604,7 +5604,7 @@ func TestCmdReasoning_NoHardcodedCodexLevels(t *testing.T) {
 	}
 
 	// Card path: the not-set hint and card note must also stay agent-agnostic.
-	card := e.renderReasoningCard()
+	card := e.renderReasoningCard(agent)
 	var md, note string
 	for _, el := range card.Elements {
 		switch v := el.(type) {
