@@ -109,6 +109,18 @@ func (a *Agent) SetModel(model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.model = model
+	if levels, known := supportedThinkingLevels(model); known && a.thinking != "" {
+		supported := false
+		for _, level := range levels {
+			if level == a.thinking {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			a.thinking = ""
+		}
+	}
 	slog.Info("pi: model changed", "model", model)
 }
 
@@ -344,14 +356,25 @@ func thinkingLevelsForDef(m *piModelDef) []string {
 // matched against every provider, preferring settings.json defaultProvider.
 func lookupModelDef(model string) (string, *piModelDef, bool) {
 	ref := strings.TrimSpace(model)
-	// Strip an optional ":thinking" suffix (pi's --model pattern syntax).
-	if idx := strings.LastIndex(ref, ":"); idx > 0 {
-		ref = ref[:idx]
-	}
 	if ref == "" {
 		return "", nil, false
 	}
 	catalog := readModelCatalog()
+	// A colon can be part of a real model ID. Exact catalog matches win.
+	if provider, model, ok := lookupCatalogRef(catalog, ref); ok {
+		return provider, model, true
+	}
+	if idx := strings.LastIndex(ref, ":"); idx > 0 {
+		for _, level := range allThinkingLevels {
+			if ref[idx+1:] == level {
+				return lookupCatalogRef(catalog, ref[:idx])
+			}
+		}
+	}
+	return "", nil, false
+}
+
+func lookupCatalogRef(catalog map[string]piProviderEntry, ref string) (string, *piModelDef, bool) {
 	if idx := strings.Index(ref, "/"); idx >= 0 {
 		provider, id := ref[:idx], ref[idx+1:]
 		entry, ok := catalog[provider]
@@ -538,38 +561,37 @@ func readCustomProviders() (map[string]piProviderEntry, bool) {
 // (custom providers like "zai-coding-team" alongside catalog providers).
 func readModelCatalog() map[string]piProviderEntry {
 	catalog := map[string]piProviderEntry{}
-	if store, ok := readStoreProviders(); ok {
-		for name, entry := range store {
-			catalog[name] = entry
-		}
-	}
-	custom, _ := readCustomProviders()
-	for name, entry := range custom {
-		base, exists := catalog[name]
-		if !exists {
-			catalog[name] = entry
-			continue
-		}
-		merged := append([]piModelDef(nil), base.Models...)
-		for _, m := range entry.Models {
-			replaced := false
-			for i := range merged {
-				if merged[i].ID == m.ID {
-					merged[i] = m
-					replaced = true
-					break
+	merge := func(source map[string]piProviderEntry) {
+		for name, entry := range source {
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			base := catalog[name]
+			positions := make(map[string]int, len(base.Models))
+			for i, m := range base.Models {
+				positions[m.ID] = i
+			}
+			for _, m := range entry.Models {
+				if strings.TrimSpace(m.ID) == "" {
+					continue
+				}
+				if i, exists := positions[m.ID]; exists {
+					base.Models[i] = m
+				} else {
+					positions[m.ID] = len(base.Models)
+					base.Models = append(base.Models, m)
 				}
 			}
-			if !replaced {
-				merged = append(merged, m)
+			if entry.Name != "" {
+				base.Name = entry.Name
 			}
+			catalog[name] = base
 		}
-		entry.Models = merged
-		if entry.Name == "" {
-			entry.Name = base.Name
-		}
-		catalog[name] = entry
 	}
+	store, _ := readStoreProviders()
+	merge(store)
+	custom, _ := readCustomProviders()
+	merge(custom)
 	return catalog
 }
 
@@ -579,6 +601,9 @@ func readModelCatalog() map[string]piProviderEntry {
 func providerOptions(catalog map[string]piProviderEntry) []core.ModelOption {
 	var models []core.ModelOption
 	for provider, entry := range catalog {
+		if strings.TrimSpace(provider) == "" {
+			continue
+		}
 		for _, m := range entry.Models {
 			if m.ID == "" {
 				continue
@@ -592,7 +617,46 @@ func providerOptions(catalog map[string]piProviderEntry) []core.ModelOption {
 	}
 	// Map iteration order is random — sort for deterministic card display.
 	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
-	return models
+	return unambiguousModelOptions(models)
+}
+
+// unambiguousModelOptions keeps one option per qualified name. Shared aliases
+// belong only to the configured default provider; without a matching default,
+// users must select the qualified name instead of an arbitrary provider.
+func unambiguousModelOptions(models []core.ModelOption) []core.ModelOption {
+	unique := make([]core.ModelOption, 0, len(models))
+	seen := map[string]bool{}
+	counts := map[string]int{}
+	preferredCounts := map[string]int{}
+	defaultProvider := ""
+	if settings, err := readSettings(); err == nil {
+		defaultProvider = settings.DefaultProvider
+	}
+	for _, m := range models {
+		name := strings.TrimSpace(m.Name)
+		provider, id, qualified := strings.Cut(name, "/")
+		if name == "" || (qualified && (strings.TrimSpace(provider) == "" || strings.TrimSpace(id) == "")) || seen[name] {
+			continue
+		}
+		m.Name = name
+		seen[name] = true
+		unique = append(unique, m)
+		if m.Alias != "" {
+			alias := strings.ToLower(m.Alias)
+			counts[alias]++
+			if defaultProvider != "" && provider == defaultProvider {
+				preferredCounts[alias]++
+			}
+		}
+	}
+	for i := range unique {
+		m := &unique[i]
+		alias := strings.ToLower(m.Alias)
+		if counts[alias] > 1 && (preferredCounts[alias] != 1 || !strings.HasPrefix(m.Name, defaultProvider+"/")) {
+			m.Alias = ""
+		}
+	}
+	return unique
 }
 
 // catalogModelOptions returns all models visible to pi's model picker:
@@ -712,7 +776,7 @@ func readSettingsModels() ([]core.ModelOption, error) {
 		}
 		models = append(models, option)
 	}
-	return models, nil
+	return unambiguousModelOptions(models), nil
 }
 
 // readModelsStore reads all models from models-store.json as
